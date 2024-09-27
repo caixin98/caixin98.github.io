@@ -259,6 +259,45 @@
 
 
 
+
+<script async src="https://www.googletagmanager.com/gtag/js?id=G-68VE56GFYC"></script>
+<script>
+  window.dataLayer = window.dataLayer || [];
+
+  function gtag() {
+      dataLayer.push(arguments);
+  }
+
+  function trackOutboundLink(url, target) {
+    gtag('event', 'click', {
+         'event_category': 'outbound',
+         'event_label': url,
+         'transport_type': 'beacon',
+         'event_callback': function () {
+           if (target !== '_blank') {
+             document.location = url;
+           }
+         }
+    });
+    console.debug("Outbound link clicked: " + url);
+  }
+
+  function onClickCallback(event) {
+    if ((event.target.tagName !== 'A') || (event.target.host === window.location.host)) {
+      return;
+    }
+    trackOutboundLink(event.target, event.target.getAttribute('target'));  
+  }
+
+  gtag('js', new Date());
+  gtag('config', 'G-68VE56GFYC', {});
+  gtag('set', {'cookie_flags': 'SameSite=None;Secure'});
+
+  
+  document.addEventListener('click', onClickCallback, false);
+</script>
+
+
   
 
 
@@ -831,6 +870,12 @@
   </div>
   <div class="ml-3">
     
+    
+    
+    <a href="/selected_publication/nips24/" >
+      <img src="/selected_publication/nips24/featured_huca65f297f99baa84df3f443d88a99d1a_309643_150x0_resize_q75_h2_lanczos_3.webp" height="64" width="150"
+           alt="PhoCoLens: Photorealistic and Consistent Reconstruction in Lensless Imaging" loading="lazy">
+    </a>
     
   </div>
 </div>
