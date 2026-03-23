@@ -1,0 +1,744 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <title>DA-VAE: Plug-in Latent Compression for Diffusion via Detail Alignment</title>
+    <link rel="icon" type="image/x-icon" href="static/img/icons/jellyfish.ico">
+
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+
+    <meta property="og:title" content="DA-VAE: Plug-in Latent Compression for Diffusion via Detail Alignment" />
+    <meta property="og:description" content="DA-VAE expands a pretrained VAE into base and detail latents with alignment, enabling high-res diffusion with fewer tokens." />
+
+    <link rel="stylesheet" href="static/css/style.css">
+    <link rel="stylesheet" href="static/css/fontawesome.all.min.css">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/jpswalsh/academicons@1/css/academicons.min.css">
+
+    <script src="static/js/distill_template.v2.js"></script>
+  </head>
+  <body>
+    <div class="header-wrapper">
+      <div class="header-container" id="header-container">
+        <div class="header-content">
+          <h1 style="margin-top: 0px"><i>DA-VAE</i></h1>
+          <h2>Plug-in Latent Compression<br>for Diffusion via Detail Alignment</h2>
+          <p>
+            DA-VAE is a plug-in latent compression method that upgrades a pretrained VAE into a base+detail
+            latent without retraining the diffusion backbone from scratch. The key idea is to preserve the
+            original latent structure while adding detail channels that are explicitly aligned to it.
+          </p>
+
+          <div class="icon-container">
+            <div class="icon-item">
+              <img src="static/img/icons/visual.svg" alt="Structured latents">
+              <div><strong>Structured base+detail latent.</strong> Keep pretrained channels intact while adding a detail branch for high-resolution content. <a href="#method-structured">See Structured Latent</a></div>
+            </div>
+            <div class="icon-item">
+              <img src="static/img/icons/connector.svg" alt="Alignment and warm start">
+              <div><strong>Alignment + warm-start.</strong> Detail channels are aligned to the base latent and trained with zero-init + loss scheduling for stable fine-tuning. <a href="#method-warmstart">See Warm-Start</a></div>
+            </div>
+            <div class="icon-item">
+              <img src="static/img/icons/eval.svg" alt="Efficiency at high resolution">
+              <div><strong>High-res with fewer tokens.</strong> 1K generation at 32x32 tokens on SD3.5-M with preserved quality. <a href="#results-sd35">See SD3.5 Results</a></div>
+            </div>
+          </div>
+
+          <div class="button-container">
+            <a href="#" class="button paper-link" target="_blank">
+              <span class="icon is-small">
+                <i class="ai ai-arxiv"></i>
+              </span>
+              arXiv (TODO)
+            </a>
+            <a href="#" class="button paper-link" target="_blank">
+              <span class="icon is-small">
+                <i class="fas fa-file-pdf"></i>
+              </span>
+              pdf (TODO)
+            </a>
+            <a href="#" class="button" target="_blank">
+              <span class="icon is-small">
+                <i class="fab fa-github"></i>
+              </span>
+              Code (TODO)
+            </a>
+            <a href="#" class="button" target="_blank">
+              <span class="icon is-small">
+                <i class="fas fa-database"></i>
+              </span>
+              Models (TODO)
+            </a>
+          </div>
+        </div>
+        <div class="header-image">
+          <img id="fig-teaser" draggable="false" src="static/img/featured.jpg" alt="DA-VAE teaser figure" class="teaser-image">
+        </div>
+      </div>
+    </div>
+
+    <d-article>
+      <div class="byline">
+        <div class="byline-container">
+          <p>
+            <span class="author-link">Xin Cai<sup>1,3</sup></span> &emsp;
+            <span class="author-link">Zhiyuan You<sup>1</sup></span> &emsp;
+            <span class="author-link">Zhoutong Zhang<sup>2&dagger;</sup></span> &emsp;
+            <span class="author-link">Tianfan Xue<sup>1,3,4</sup></span>
+          </p>
+          <p>
+            <span class="affiliation-link"><sup>1</sup>Multimedia Laboratory, CUHK</span> &emsp;
+            <span class="affiliation-link"><sup>2</sup>Adobe NextCam</span> &emsp;
+            <span class="affiliation-link"><sup>3</sup>Shanghai AI Laboratory</span> &emsp;
+            <span class="affiliation-link"><sup>4</sup>CPII under InnoHK</span>
+          </p>
+          <p style="text-align: center; margin-bottom: 0;">
+            <span class="author-note"><sup>&dagger;</sup>Project lead</span>
+          </p>
+        </div>
+      </div>
+
+      <p class="text abstract">
+        We introduce DA-VAE, a plug-in latent compression method that upgrades a pretrained VAE into a structured
+        base+detail latent. By aligning the new detail channels to the original latent structure, DA-VAE preserves
+        pretrained diffusion behavior while enabling higher-resolution generation with fewer tokens. We validate
+        this on ImageNet and SD3.5-M fine-tuning.
+      </p>
+
+      <p class="text">
+        DA-VAE is organized around five key pillars that motivate the rest of this page:
+      </p>
+      <ol class="text">
+        <li><strong><a href="#method-structured">Structured Latent</a>:</strong> base+detail channels retain pretrained structure while adding high-res capacity.</li>
+        <li><strong><a href="#method-warmstart">Warm-Start Training</a>:</strong> zero-init and loss scheduling stabilize diffusion fine-tuning.</li>
+        <li><strong><a href="#method-alignment">Latent Alignment</a>:</strong> alignment regularizes detail channels to avoid unstructured residuals.</li>
+        <li><strong><a href="#results-sd35">Results</a>:</strong> 1K generation at 32x32 tokens on SD3.5-M with preserved quality.</li>
+        <li><strong><a href="#results-tradeoff">Trade-off Analysis</a>:</strong> improved generation quality with competitive reconstruction.</li>
+      </ol>
+
+      <div class="icon-row">
+        <a class="icon-link" href="#method-structured">
+          <img class="icon" src="static/img/icons/visual.svg" alt="Structured Latent">
+          <span>Structured Latent</span>
+        </a>
+        <a class="icon-link" href="#method-warmstart">
+          <img class="icon" src="static/img/icons/connector.svg" alt="Warm-Start Training">
+          <span>Warm-Start</span>
+        </a>
+        <a class="icon-link" href="#analysis-alignment">
+          <img class="icon" src="static/img/icons/data.svg" alt="Latent Alignment">
+          <span>Alignment</span>
+        </a>
+        <a class="icon-link" href="#results-sd35">
+          <img class="icon" src="static/img/icons/eval.svg" alt="Results">
+          <span>Results</span>
+        </a>
+        <a class="icon-link" href="#results-tradeoff">
+          <img class="icon" src="static/img/icons/recipe.svg" alt="Trade-off Analysis">
+          <span>Trade-off</span>
+        </a>
+      </div>
+
+      <p class="text" style="text-align: center; margin-bottom: 0;">
+        <span class="click-hint">Click to jump to each section.</span>
+      </p>
+
+      <div class="section-border"></div>
+
+      <h2 class="text" id="problem">Motivation</h2>
+      <p class="text">
+        Modern diffusion transformers (DiTs) are increasingly bottlenecked by attention cost, which scales
+        quadratically with the number of visual tokens. A straightforward way to support higher resolutions is to
+        increase the token grid (e.g., 64x64 for 1K), but this quickly becomes expensive. Existing high-compression
+        tokenizers can reduce token count, yet often introduce a new latent space that is difficult for diffusion
+        to model, forcing costly retraining from scratch.
+      </p>
+      <p class="text">
+        DA-VAE aims for a more practical upgrade path: start from an existing pretrained diffusion model and
+        increase tokenizer efficiency while keeping the original latent structure as a reference.
+      </p>
+      <ul class="text">
+        <li><strong>Goal:</strong> represent higher-resolution images with the same token grid (or fewer tokens) while keeping diffusion training stable.</li>
+        <li><strong>Constraint:</strong> avoid full retraining of the diffusion backbone; preserve the pretrained prior at initialization.</li>
+        <li><strong>Key idea:</strong> expand the latent in a structured way (base + detail) and align the new channels to the pretrained latent structure.</li>
+      </ul>
+
+      <div class="section-border"></div>
+
+      <h2 class="text" id="method">Method</h2>
+      <p class="text">
+        DA-VAE consists of (i) a structured latent space that reuses the pretrained latent as the first channels,
+        (ii) a simple alignment loss that regularizes the new detail channels, and (iii) a warm-start recipe that
+        adapts a pretrained DiT with minimal disruption.
+      </p>
+
+      <p class="text">
+        The following overview figure (Fig. Method) summarizes the full method; the rest of this section unpacks
+        it into three components.
+      </p>
+
+      <div class="figure-container" id="fig-a">
+        <figure>
+          <img src="static/img/fig-method.jpg" alt="Overview of DA-VAE: structured latent, alignment, and zero-init warm start">
+          <figcaption>Overview of the base-detail latent and zero-init warm start (Fig. Method).</figcaption>
+        </figure>
+      </div>
+
+      <h3 class="text" id="method-structured">1) Structured base + detail latent</h3>
+      <p class="text">
+        Let a pretrained VAE encoder produce a base latent <strong>z</strong> for a base-resolution image, with
+        <strong>C</strong> channels. DA-VAE encodes the corresponding high-resolution image with the same spatial
+        token grid, but with <strong>C + D</strong> channels by concatenating (a) the unchanged pretrained latent
+        channels and (b) an additional <strong>D</strong>-channel detail latent <strong>z_d</strong>. A single
+        decoder reconstructs the high-resolution image from <strong>[z, z_d]</strong>.
+      </p>
+      <p class="text">
+        In terms of tokenizer efficiency, this design supports increasing spatial compression (downsampling) while
+        compensating capacity in the channel dimension. In experiments, the paper sets the high-resolution scale
+        factor to <strong>s = 2</strong> (e.g., 512 to 1024), keeping the token grid fixed while expanding channels.
+      </p>
+
+      <div class="figure-container" id="fig-b">
+        <figure>
+          <img src="static/img/fig-down-block.png" alt="DA-VAE architecture instantiated on SD3-VAE with lightweight downsampling and upsampling blocks">
+          <figcaption>DA-VAE instantiated on SD3-VAE with lightweight downsampling and upsampling blocks.</figcaption>
+        </figure>
+      </div>
+
+      <h3 class="text" id="method-alignment">2) Detail alignment (make z_d diffusion-friendly)</h3>
+      <p class="text">
+        Without additional structure, extra channels tend to absorb noisy residuals and are hard for diffusion to
+        model. DA-VAE introduces a latent alignment loss that encourages <strong>z_d</strong> to mirror the
+        structure of the pretrained latent <strong>z</strong>, using a parameter-free grouped channel reduction
+        to compare the two (see Alignment analysis in <a href="#analysis">Ablations</a>).
+      </p>
+      <p class="text">
+        Concretely, the paper projects <strong>z_d</strong> back to <strong>C</strong> channels via grouped
+        averaging (with group ratio <strong>r = D / C</strong>) and minimizes an L2 distance to the base latent.
+      </p>
+      <p class="text">
+        Training-wise, the paper keeps the original encoder for <strong>z</strong> fixed and optimizes the detail
+        encoder and decoder with standard reconstruction losses plus the alignment loss. This is a deliberate
+        choice: the base channels remain a stable reference for both reconstruction and diffusion fine-tuning.
+      </p>
+
+      <h3 class="text" id="method-warmstart">3) Warm-start diffusion fine-tuning</h3>
+      <p class="text">
+        To adapt a pretrained DiT to the expanded latent, DA-VAE adds an extra patch embedder and output head for
+        the new detail channels. These added modules are <strong>zero-initialized</strong>, so the model is
+        functionally identical to the pretrained DiT at the start of fine-tuning. A <strong>gradual loss
+        scheduling</strong> further down-weights the detail-branch loss early on, then ramps it up to encourage the
+        model to learn the new channels stably.
+      </p>
+      <p class="text">
+        For large backbones such as SD3.5, the paper applies LoRA to attention and FFN layers while still training
+        the (added) patch embedder and output heads, matching the warm-start objective: preserve what is already
+        learned, and focus adaptation capacity on the interface to the new latent channels.
+      </p>
+
+      <div class="section-border"></div>
+
+      <h2 class="text" id="results">Results</h2>
+      <p class="text">
+        This section summarizes the main empirical takeaways and points to the exact tables/figures used as
+        evidence. For qualitative evidence, jump to <a href="#visuals">Qualitative Results</a>.
+      </p>
+
+      <h3 class="text" id="results-sd35">Text-to-image: SD3.5-M at 1024x1024 with fewer tokens</h3>
+      <p class="text"><strong>Takeaway:</strong> DA-VAE enables 1K generation with a 32x32 token grid while keeping SD3.5-M quality competitive.</p>
+      <p class="text"><strong>Evidence:</strong> On MJHQ-30K at 1024x1024, DA-VAE achieves FID 10.91 / CLIP 31.91 / GenEval 0.64 at 1.03 img/s using 32x32 tokens, while SD3.5-medium uses 64x64 tokens at 0.25 img/s (see <a href="#tab-sd35">SD3.5 Results</a>).</p>
+      <p class="text"><strong>Additional evidence:</strong> Under the same 32x32 token grid and throughput, DA-VAE improves over the SD3.5 upsample baseline (FID 10.91 vs 12.04, CLIP 31.91 vs 30.17; <a href="#tab-sd35">SD3.5 Results</a>).</p>
+      <p class="text"><strong>Interpretation:</strong> By allocating capacity into aligned detail channels (instead of more spatial tokens), DA-VAE improves throughput (about 4x vs SD3.5-medium in this table) without requiring a new diffusion model from scratch.</p>
+      <ul class="text">
+        <li><strong>What "32x32 tokens" means:</strong> the diffusion model operates on a 32-by-32 latent grid rather than 64-by-64 at 1K, reducing attention cost substantially.</li>
+        <li><strong>Where quality is measured:</strong> FID/CLIP/GenEval are reported under the paper's MJHQ-30K protocol at 1024x1024.</li>
+        <li><strong>Where to see visuals:</strong> <a href="#fig-c">the 1K comparison</a> and <a href="#fig-d">the 2K comparison</a>.</li>
+      </ul>
+
+      <div id="tab-sd35" class="table-container">
+        <table class="data-table">
+          <caption>SD3.5 Results (MJHQ-30K, 1024x1024)</caption>
+          <thead>
+            <tr>
+              <th>Method</th>
+              <th>Autoencoder</th>
+              <th>Tokens</th>
+              <th>Params (B)</th>
+              <th>Throughput (img/s)</th>
+              <th>FID</th>
+              <th>CLIP Score</th>
+              <th>GenEval</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>PixArt-Sigma</td>
+              <td>NA</td>
+              <td>64x64</td>
+              <td>0.6</td>
+              <td>0.40</td>
+              <td>6.15</td>
+              <td>28.26</td>
+              <td>0.54</td>
+            </tr>
+            <tr>
+              <td>Hunyuan-DiT</td>
+              <td>NA</td>
+              <td>64x64</td>
+              <td>1.5</td>
+              <td>0.05</td>
+              <td>6.54</td>
+              <td>28.19</td>
+              <td>0.63</td>
+            </tr>
+            <tr>
+              <td>SANA-1.5</td>
+              <td>DC-AE (f32c32p1)</td>
+              <td>32x32</td>
+              <td>4.8</td>
+              <td>0.26</td>
+              <td>5.99</td>
+              <td>29.23</td>
+              <td>0.80</td>
+            </tr>
+            <tr>
+              <td>FLUX-dev</td>
+              <td>FLUX-VAE (f8c16p2)</td>
+              <td>64x64</td>
+              <td>12</td>
+              <td>0.04</td>
+              <td>10.15</td>
+              <td>27.47</td>
+              <td>0.67</td>
+            </tr>
+            <tr>
+              <td>SD3-medium</td>
+              <td>SD3-VAE (f8c16p2)</td>
+              <td>64x64</td>
+              <td>2.0</td>
+              <td>0.36</td>
+              <td>11.92</td>
+              <td>27.83</td>
+              <td>0.62</td>
+            </tr>
+            <tr>
+              <td>SD3.5-medium</td>
+              <td>SD3-VAE (f8c16p2)</td>
+              <td>64x64</td>
+              <td>2.5</td>
+              <td>0.25</td>
+              <td>10.31</td>
+              <td>29.74</td>
+              <td>0.63</td>
+            </tr>
+            <tr>
+              <td>SD3.5-medium (upsample)</td>
+              <td>SD3-VAE (f8c16p2)</td>
+              <td>32x32</td>
+              <td>2.5</td>
+              <td>1.03</td>
+              <td>12.04</td>
+              <td>30.17</td>
+              <td>0.63</td>
+            </tr>
+            <tr class="highlight-blue">
+              <td><strong>Ours (SD3.5-M + DA-VAE)</strong></td>
+              <td><strong>DA-VAE (f16c32p2)</strong></td>
+              <td><strong>32x32</strong></td>
+              <td>2.5</td>
+              <td><strong>1.03</strong></td>
+              <td><strong>10.91</strong></td>
+              <td><strong>31.91</strong></td>
+              <td><strong>0.64</strong></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="text">
+        Notes: Throughput is measured on a single A100 (BF16, batch size 10) under the paper's protocol. Several
+        baseline rows are copied under the same evaluation protocol as stated in the paper table caption.
+      </p>
+
+      <h3 class="text" id="results-imagenet">Class-conditional generation: ImageNet 512x512</h3>
+      <p class="text"><strong>Takeaway:</strong> DA-VAE adapts a pretrained generator to a more compressed latent setting and achieves strong ImageNet performance under fine-tuning.</p>
+      <p class="text"><strong>Evidence:</strong> With DA-VAE (f32c128p1) at 16x16 tokens, fine-tuning reaches FID-50k 4.84 and IS 314.3 with CFG at 80 epochs (see <a href="#tab-imagenet">ImageNet 512x512</a>).</p>
+      <p class="text"><strong>Additional evidence:</strong> The table also shows that DA-VAE reaches strong performance even at 25 epochs (FID-50k 6.04, IS 277.6), highlighting the efficiency of the warm-start recipe under limited budgets (see <a href="#tab-imagenet">ImageNet 512x512</a>).</p>
+      <p class="text"><strong>Interpretation:</strong> The structured latent and warm-start recipe enable a favorable fine-tuning regime compared to training from scratch for new tokenizers.</p>
+
+      <div id="tab-imagenet" class="table-container">
+        <table class="data-table">
+          <caption>ImageNet 512x512: Efficiency and Performance</caption>
+          <thead>
+            <tr>
+              <th>Method</th>
+              <th>Training Regime</th>
+              <th>Autoencoder</th>
+              <th>rFID</th>
+              <th>Tokens</th>
+              <th>Epochs</th>
+              <th>FID-50k (w/o CFG)</th>
+              <th>FID-50k (w/ CFG)</th>
+              <th>Inception Score</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>DiT-XL</td>
+              <td>Scratch</td>
+              <td>SD-VAE (f8c4p2)</td>
+              <td>0.48</td>
+              <td>32x32</td>
+              <td>2400</td>
+              <td>12.04</td>
+              <td>3.04</td>
+              <td>255.3</td>
+            </tr>
+            <tr>
+              <td>REPA</td>
+              <td>Scratch</td>
+              <td>SD-VAE (f8c4p2)</td>
+              <td>0.48</td>
+              <td>32x32</td>
+              <td>200</td>
+              <td>NA</td>
+              <td>2.08</td>
+              <td>274.6</td>
+            </tr>
+            <tr>
+              <td>DiT-XL</td>
+              <td>Scratch</td>
+              <td>DC-AE (f32c32p1)</td>
+              <td>0.66</td>
+              <td>16x16</td>
+              <td>2400</td>
+              <td>9.56</td>
+              <td>2.84</td>
+              <td>117.5</td>
+            </tr>
+            <tr>
+              <td>DC-Gen-DiT-XL</td>
+              <td>Fine-tune</td>
+              <td>DC-AE (f32c32p1)</td>
+              <td>0.66</td>
+              <td>16x16</td>
+              <td>80</td>
+              <td>8.21</td>
+              <td>2.22</td>
+              <td>122.5</td>
+            </tr>
+            <tr>
+              <td>LightningDiT-XL*</td>
+              <td>Scratch</td>
+              <td>VA-VAE (f16c32p2)</td>
+              <td>0.50</td>
+              <td>16x16</td>
+              <td>80</td>
+              <td>21.79</td>
+              <td>3.98</td>
+              <td>229.7</td>
+            </tr>
+            <tr>
+              <td>LightningDiT-XL</td>
+              <td>Fine-tune</td>
+              <td>VA-VAE (f16c32p2)</td>
+              <td>0.50</td>
+              <td>16x16</td>
+              <td>80</td>
+              <td>11.31</td>
+              <td>3.12</td>
+              <td>254.5</td>
+            </tr>
+            <tr class="highlight-blue">
+              <td><strong>Ours (DA-VAE)</strong></td>
+              <td><strong>Fine-tune</strong></td>
+              <td><strong>DA-VAE (f32c128p1)</strong></td>
+              <td><strong>0.47</strong></td>
+              <td><strong>16x16</strong></td>
+              <td><strong>25</strong></td>
+              <td><strong>6.04</strong></td>
+              <td><strong>2.07</strong></td>
+              <td><strong>277.6</strong></td>
+            </tr>
+            <tr class="highlight-blue">
+              <td><strong>Ours (DA-VAE)</strong></td>
+              <td><strong>Fine-tune</strong></td>
+              <td><strong>DA-VAE (f32c128p1)</strong></td>
+              <td><strong>0.47</strong></td>
+              <td><strong>16x16</strong></td>
+              <td><strong>80</strong></td>
+              <td><strong>4.84</strong></td>
+              <td><strong>1.68</strong></td>
+              <td><strong>314.3</strong></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="text">
+        Notes: Some reference numbers are copied directly from prior work as indicated in the paper (see table
+        caption in the LaTeX source).
+      </p>
+
+      <h3 class="text" id="results-tradeoff">Autoencoder trade-off: reconstruction vs generation</h3>
+      <p class="text"><strong>Takeaway:</strong> DA-VAE improves generation quality while keeping reconstruction metrics competitive.</p>
+      <p class="text"><strong>Evidence:</strong> Among compared autoencoders, DA-VAE reports the best FID-10k (31.51) while maintaining rFID 0.47 / PSNR 28.53 / LPIPS 0.12 / SSIM 0.78 on ImageNet val reconstructions (see <a href="#tab-ae">Autoencoder Trade-off</a>).</p>
+      <p class="text"><strong>Interpretation:</strong> This supports the paper's claim that a structured latent with alignment can be more diffusion-friendly than naively increasing channel width.</p>
+
+      <div id="tab-ae" class="table-container">
+        <table class="data-table">
+          <caption>Autoencoder Trade-off (ImageNet val reconstruction + generation)</caption>
+          <thead>
+            <tr>
+              <th>Autoencoder</th>
+              <th>rFID (down)</th>
+              <th>PSNR (up)</th>
+              <th>LPIPS (down)</th>
+              <th>SSIM (up)</th>
+              <th>FID-10k (down)</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>SD-VAE (f8c4p4)</td>
+              <td>0.48</td>
+              <td>29.22</td>
+              <td>0.13</td>
+              <td>0.79</td>
+              <td>58.17</td>
+            </tr>
+            <tr>
+              <td>DC-AE (f32c32p1)</td>
+              <td>0.66</td>
+              <td>27.78</td>
+              <td>0.16</td>
+              <td>0.74</td>
+              <td>35.97</td>
+            </tr>
+            <tr>
+              <td>VA-VAE (f16c32p2)</td>
+              <td>0.50</td>
+              <td>28.43</td>
+              <td>0.13</td>
+              <td>0.78</td>
+              <td>44.65</td>
+            </tr>
+            <tr class="highlight-blue">
+              <td><strong>DA-VAE (f32c128p1)</strong></td>
+              <td><strong>0.47</strong></td>
+              <td>28.53</td>
+              <td><strong>0.12</strong></td>
+              <td>0.78</td>
+              <td><strong>31.51</strong></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="section-border"></div>
+
+      <h2 class="text" id="visuals">Qualitative Results</h2>
+      <p class="text">
+        These figures complement the tables above by showing where detail channels help: richer local textures,
+        fewer structural failures, and better prompt-faithful composition. For the SD3.5 comparisons, the paper's
+        baseline is produced by generating at 512x512 then upsampling to 1K.
+      </p>
+      <ul class="text">
+        <li><strong>Look for:</strong> fine-grained textures (foliage, fur, text), and whether complex layouts remain coherent.</li>
+        <li><strong>Link:</strong> quantitative summary in <a href="#tab-sd35">SD3.5 Results</a>.</li>
+      </ul>
+      <div class="figure-container" id="fig-c">
+        <figure>
+          <img src="static/img/fig-compare-sd35.jpg" alt="Qualitative comparison at 1024x1024: DA-VAE vs SD3.5-M baseline with 512x512 upsampling">
+          <figcaption>DA-VAE vs SD3.5-M at 1024x1024 (baseline uses 512x512 upsampling).</figcaption>
+        </figure>
+      </div>
+      <ul class="text">
+        <li><strong>Look for:</strong> large-object distortion and scene-layout collapse in the naive 2K baseline.</li>
+        <li><strong>Link:</strong> teaser highlights a reported 6.04x speedup at 2K (<a href="#fig-teaser">Fig. Teaser</a>).</li>
+      </ul>
+      <div class="figure-container" id="fig-d">
+        <figure>
+          <img src="static/img/fig-compare-sd35-2k.jpg" alt="Qualitative comparison at 2048x2048: DA-VAE vs SD3.5-M baseline">
+          <figcaption>DA-VAE vs SD3.5-M at 2048x2048. DA-VAE maintains global structure and detail.</figcaption>
+        </figure>
+      </div>
+      <div class="figure-container" id="fig-e">
+        <figure>
+          <img src="static/img/fig-res-imagenet.jpg" alt="Qualitative ImageNet 512x512 samples from DA-VAE fine-tuning">
+          <figcaption>ImageNet 512x512 qualitative samples from DA-VAE fine-tuning.</figcaption>
+        </figure>
+      </div>
+      <div class="figure-container" id="fig-f">
+        <figure>
+          <img src="static/img/fig-suppl.jpg" alt="Additional SD3.5-M qualitative results from the supplementary material">
+          <figcaption>Additional SD3.5-M qualitative results (supplementary).</figcaption>
+        </figure>
+      </div>
+
+      <div class="section-border"></div>
+
+      <h2 class="text" id="analysis">Ablations</h2>
+      <p class="text">
+        This section explains <em>why</em> the method components matter, using targeted ablations and diagnostics.
+        Each claim below is tied to the corresponding table/figure.
+      </p>
+
+      <h3 class="text" id="analysis-alignment">Alignment is necessary for a structured detail latent</h3>
+      <p class="text"><strong>Takeaway:</strong> Without alignment, the detail channels become unstructured and generation quality drops.</p>
+      <p class="text"><strong>Evidence:</strong> In component ablations, removing alignment increases FID-10k from 9.27 to 16.37 (see <a href="#tab-ablation-components">Component Ablations</a>), and the alignment visualization shows more organized features under alignment (see <a href="#fig-g">Fig. Alignment</a>).</p>
+      <p class="text"><strong>Interpretation:</strong> Alignment turns the added width into usable structure rather than noisy residual capacity.</p>
+
+      <div class="figure-container" id="fig-g">
+        <figure>
+          <img src="static/img/fig-discussion.jpg" alt="Effect of latent alignment on detail channels: improved structure vs reconstruction-only training">
+          <figcaption>Alignment structures detail latents for VA-VAE and SD3-VAE (Fig. Alignment).</figcaption>
+        </figure>
+      </div>
+
+      <div id="tab-ablation-align-weight" class="table-container">
+        <table class="data-table">
+          <caption>Alignment Weight Ablation</caption>
+          <thead>
+            <tr>
+              <th>Alignment Weight</th>
+              <th>rFID</th>
+              <th>PSNR</th>
+              <th>LPIPS</th>
+              <th>SSIM</th>
+              <th>FID-10k</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>0.0</td>
+              <td>0.59</td>
+              <td>29.23</td>
+              <td>0.11</td>
+              <td>0.80</td>
+              <td>16.37</td>
+            </tr>
+            <tr>
+              <td>0.1</td>
+              <td>0.55</td>
+              <td>28.70</td>
+              <td>0.12</td>
+              <td>0.79</td>
+              <td>9.58</td>
+            </tr>
+            <tr class="highlight-blue">
+              <td><strong>0.5</strong></td>
+              <td><strong>0.47</strong></td>
+              <td><strong>28.53</strong></td>
+              <td><strong>0.12</strong></td>
+              <td><strong>0.78</strong></td>
+              <td><strong>9.27</strong></td>
+            </tr>
+            <tr>
+              <td>1.0</td>
+              <td>0.63</td>
+              <td>27.90</td>
+              <td>0.14</td>
+              <td>0.76</td>
+              <td>9.23</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="text">
+        Reading guide: increasing alignment weight tends to improve generation FID-10k while slightly degrading
+        reconstruction metrics; the paper uses a moderate weight (0.5) as a trade-off in other experiments.
+      </p>
+
+      <div class="figure-container" id="fig-h">
+        <figure>
+          <img src="static/img/fig-loss.jpg" alt="Diffusion loss curves during SD3.5-M fine-tuning with and without latent alignment">
+          <figcaption>Training dynamics with and without alignment during SD3.5-M fine-tuning.</figcaption>
+        </figure>
+      </div>
+      <p class="text">
+        Reading guide: this figure plots the <strong>unweighted</strong> diffusion loss (per-token MSE) on the
+        base latent (blue) and the detail latent (green), showing raw curves (faint) and an EMA (solid). Without
+        latent alignment, the detail-latent loss decreases slowly and stays substantially higher than the
+        base-latent loss. With alignment, optimization becomes more stable and converges to a lower-loss solution;
+        the detail-latent loss eventually falls below the base-latent loss, indicating that the DiT learns a
+        well-structured distribution over the added detail channels.
+      </p>
+
+      <h3 class="text" id="analysis-warmstart">Warm-start matters: zero-init and scheduling</h3>
+      <p class="text"><strong>Takeaway:</strong> Preserving pretrained behavior at initialization makes fine-tuning stable and efficient.</p>
+      <p class="text"><strong>Evidence:</strong> Removing zero-init increases FID-10k to 29.73, and removing the scheduler degrades FID-10k from 9.27 to 9.80 (see <a href="#tab-ablation-components">Component Ablations</a>). Zero-init also yields faster convergence in the <a href="#fig-init">zero-init comparison</a>.</p>
+      <p class="text"><strong>Interpretation:</strong> The extra heads start as no-ops, then the model gradually learns the new detail distribution.</p>
+
+      <div id="tab-ablation-components" class="table-container">
+        <table class="data-table">
+          <caption>Component Ablations (FID-10k)</caption>
+          <thead>
+            <tr>
+              <th>Method</th>
+              <th>Alignment</th>
+              <th>Zero Init</th>
+              <th>Weight Scheduler</th>
+              <th>FID-10k</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr class="highlight-blue">
+              <td><strong>Ours (full)</strong></td>
+              <td>yes</td>
+              <td>yes</td>
+              <td>yes</td>
+              <td><strong>9.27</strong></td>
+            </tr>
+            <tr>
+              <td>w/o alignment</td>
+              <td>no</td>
+              <td>yes</td>
+              <td>yes</td>
+              <td>16.37</td>
+            </tr>
+            <tr>
+              <td>w/o zero init</td>
+              <td>yes</td>
+              <td>no</td>
+              <td>yes</td>
+              <td>29.73</td>
+            </tr>
+            <tr>
+              <td>w/o weight scheduler</td>
+              <td>yes</td>
+              <td>yes</td>
+              <td>no</td>
+              <td>9.80</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div id="fig-init" class="figure-container">
+        <figure>
+          <img src="static/img/fig-initialization.jpg" alt="Zero initialization vs random initialization for added heads during fine-tuning">
+          <figcaption>Zero-init stabilizes and accelerates diffusion fine-tuning (Fig. Initialization).</figcaption>
+        </figure>
+      </div>
+
+    </d-article>
+
+    <d-appendix>
+      <h3>BibTeX</h3>
+      <p class="bibtex">
+        @inproceedings{cai2026davae,<br>
+        &nbsp;&nbsp;title={{DA-VAE: Plug-in Latent Compression for Diffusion via Detail Alignment}},<br>
+        &nbsp;&nbsp;author={Cai, Xin and You, Zhiyuan and Zhang, Zhoutong and Xue, Tianfan},<br>
+        &nbsp;&nbsp;booktitle={CVPR},<br>
+        &nbsp;&nbsp;year={2026},<br>
+        &nbsp;&nbsp;note={CVPR 2026}<br>
+        }
+      </p>
+      <d-footnote-list></d-footnote-list>
+      <d-citation-list></d-citation-list>
+    </d-appendix>
+
+    <script src="static/js/fontawesome.all.min.js"></script>
+    <script src="static/js/medium-zoom.min.js"></script>
+    <script src="static/js/zoom.js"></script>
+    <script src="static/js/nav-bar.js"></script>
+  </body>
+</html>
