@@ -93,6 +93,15 @@ body {
     color: #ffe099;
 }
 
+.header-content a {
+    color: #7ec8ff;
+    text-decoration: underline;
+}
+
+.header-content a:hover {
+    color: #ffffff;
+}
+
 .header-content {
     color: #FFF7D4;
     text-align: left;
